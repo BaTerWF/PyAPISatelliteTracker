@@ -23,17 +23,14 @@ PEP 8:
 Установка и настройка
 Клонирование репозитория:
 
-bash
-Копировать код
-git clone https://github.com/your-repo/project.git
+git clone https://github.com/User/PyAPISatelliteTracker.git
 cd project
 Создание виртуального окружения:
 
-bash
-Копировать код
 python3.11 -m venv venv
 source venv/bin/activate  # Для Linux/MacOS
 .\venv\Scripts\activate    # Для Windows
+
 Установка зависимостей:
 
 После активации виртуального окружения установите все зависимости:
