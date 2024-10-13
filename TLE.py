@@ -5,6 +5,8 @@ from astropy import units as u
 from astropy.coordinates import CartesianRepresentation
 import numpy as np
 
+
+# Пока не работает.
 class TLEConverter:
     def __init__(self, tle_line1, tle_line2):
         self.tle_line1 = tle_line1
@@ -13,14 +15,12 @@ class TLEConverter:
         self.satellite = EarthSatellite(tle_line1, tle_line2, 'Sat', self.timescale)
 
     def tle_to_ef(self, time_str):
-        """Преобразует TLE в Earth-Fixed координаты на заданное время"""
         t = self.timescale.utc(Time(time_str).datetime)
         geocentric = self.satellite.at(t)
         subpoint = geocentric.subpoint()
         return subpoint.latitude.degrees, subpoint.longitude.degrees, subpoint.elevation.m
 
     def ef_to_j2000(self, time_str):
-        """Преобразует Earth-Fixed в J2000"""
         lat, lon, elevation = self.tle_to_ef(time_str)
         location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elevation*u.m)
         time = Time(time_str)
@@ -29,18 +29,14 @@ class TLEConverter:
         return gcrs.cartesian
 
     def j2000_to_gtsk(self, time_str):
-        """Преобразует координаты J2000 в ГЦСК (ECEF)"""
         cartesian = self.ef_to_j2000(time_str)
         x, y, z = cartesian.x.value, cartesian.y.value, cartesian.z.value
-        # Простое преобразование в ГЦСК может быть сложным, но это начальный подход
         return x, y, z
 
     def gtsk_to_pz90(self, x, y, z):
-        """Преобразование из ГЦСК в ПЗ-90"""
         return x, y, z
 
     def convert(self, time_str):
-        """Основной метод для выполнения всех преобразований"""
         lat, lon, elevation = self.tle_to_ef(time_str)
         print(f"EF (Lat, Lon, Elev): {lat}, {lon}, {elevation}")
 
