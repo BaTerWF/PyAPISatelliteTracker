@@ -1,14 +1,20 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
 from loguru import logger
 import requests
 from dotenv import load_dotenv
 import os
 from database import Database
 from TLE import TLEConverter
-from datetime import datetime, timezone
-from skyfield.api import utc
+from skyfield.api import load, EarthSatellite
+from astropy.time import Time
+from astropy.coordinates import EarthLocation, GCRS, ITRS
+from astropy import units as u
+import numpy as np
+from datetime import datetime, timedelta
 
-
+html = Jinja2Templates(directory="html")
 load_dotenv("config.env")
 pg_host = os.getenv("PG_HOST")
 pg_port = os.getenv("PG_PORT")
@@ -64,23 +70,22 @@ async def get_tle(satelliteName:str = None, noradID:str = None):
     return result
 
 @app.get("/convert_TLE")
-async def convert(satelliteName: str = None, noradID: str = None):
+async def convert(satelliteName: str = None, noradID: str = None, Time = 1, step_minutes = 5):
     satelliteTle = await get_tle(satelliteName=satelliteName, noradID=noradID)
-
-    if isinstance(satelliteTle, dict) and "error" in satelliteTle:
-        return satelliteTle
-
-    now = datetime.now().replace(tzinfo=utc) #не понятно какое ему время нужно.
-    now_str = now.isoformat()
-
-    satellite_name = satelliteTle['satellite_name']
     tle_line1 = satelliteTle['line1']
     tle_line2 = satelliteTle['line2']
+    converter = TLEConverter(tle_line1, tle_line2)
+    start_time = datetime.utcnow()
+    end_time = start_time + timedelta(hours=int(Time))
+    orbit_data = converter.calculate_orbit(start_time, end_time, step_minutes=int(step_minutes))
+    TrackSatelite = []
+    for coord in orbit_data:
+        TrackSatelite.append({"lat": coord[0], "lon": coord[1], "alt": coord[2]})
+    print(TrackSatelite)
+    return TrackSatelite
 
-    SATELLITE = TLEConverter(tle_line1, tle_line2)
-    ef = SATELLITE.tle_to_ef(now_str)
-
-    return {"message": f"Converted EF for {satellite_name}: {ef}"}
-
+@app.get("/display_maps", response_class=HTMLResponse)
+async def display_maps(request: Request):
+    return html.TemplateResponse("index.html", {"request": request})
 
 
