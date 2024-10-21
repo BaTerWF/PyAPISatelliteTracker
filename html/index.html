@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satellite Orbit Visualization with WebGL Earth</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        #earth_container {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <input type="text" id="satellite_name" placeholder="Введите имя спутника">
+        <input type="number" id="time" placeholder="Часы">
+        <input type="number" id="step" placeholder="Шаг">
+        <button onclick="addSatellite()">Добавить спутник</button>
+    </div>
+    <div id="earth_container"></div>
+
+    <script src="https://www.webglearth.com/v2/api.js"></script>
+    <script>
+
+        const earth = new WE.map('earth_container');
+
+        earth.setView([51.505, -0.09], 3);
+
+        WE.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: 'Map data © OpenStreetMap contributors'
+        }).addTo(earth);
+
+        let orbitData = [];
+
+        async function fetchOrbitData(satelliteName, Time, step) {
+            const response = await fetch(`/convert_TLE?satelliteName=${satelliteName}&Time=${Time}&step_minutes=${step}`);
+            orbitData = await response.json();
+            plotOrbit();
+        }
+
+        function plotOrbit() {
+            const orbitCoordinates = [];
+            orbitData.forEach(point => {
+                orbitCoordinates.push([point.lat, point.lon]);
+            });
+
+            const orbitLine = WE.polygon(orbitCoordinates, {
+            color: '#ff0000',
+             weight: 3,
+             opacity: 0.7,
+            fill: false
+            }).addTo(earth);
+        }
+
+        function addSatellite() {
+            const satelliteName = document.getElementById('satellite_name').value;
+            const Time = document.getElementById('time').value;
+            const step = document.getElementById('step').value;
+            if (satelliteName) {
+                fetchOrbitData(satelliteName, Time, step);
+            } else {
+                alert("Введите имя спутника.");
+            }
+        }
+
+    </script>
+</body>
+</html>
