@@ -46,6 +46,7 @@ def read_root():
 
 @app.get("/fetch_tle")
 def fetch_tle():
+
     try:
         response = requests.get(TLE_URL)
         if response.status_code != 200:
@@ -82,6 +83,7 @@ async def convert(satelliteName: str = None, noradID: str = None, Time = 1, step
     for coord in orbit_data:
         TrackSatelite.append({"lat": coord[0], "lon": coord[1], "alt": coord[2]})
     print(TrackSatelite)
+
     return TrackSatelite
 
 @app.get("/display_maps", response_class=HTMLResponse)
