@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Satellite Orbit Visualization with WebGL Earth</title>
+    <title>Satellite Orbits with OpenStreetMap Globe</title>
     <style>
         body, html {
             margin: 0;
@@ -12,65 +12,98 @@
             height: 100%;
             overflow: hidden;
         }
-        #earth_container {
-            width: 100%;
-            height: 100%;
-        }
     </style>
 </head>
 <body>
-    <div id="controls">
-        <input type="text" id="satellite_name" placeholder="Введите имя спутника">
-        <input type="number" id="time" placeholder="Часы">
-        <input type="number" id="step" placeholder="Шаг">
-        <button onclick="addSatellite()">Добавить спутник</button>
-    </div>
     <div id="earth_container"></div>
 
-    <script src="https://www.webglearth.com/v2/api.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
     <script>
+        // Создаем сцену, камеру и рендерер
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
 
-        const earth = new WE.map('earth_container');
+        // Управление камерой
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
 
-        earth.setView([51.505, -0.09], 3);
+        // Геометрия Земли
+        const earthRadius = 10;
+        const earthGeometry = new THREE.SphereGeometry(earthRadius, 64, 64);
 
-        WE.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: 'Map data © OpenStreetMap contributors'
-        }).addTo(earth);
+        // Загружаем текстуру OpenStreetMap
+        const textureLoader = new THREE.TextureLoader();
+        const osmTileUrl = 'https://tile.openstreetmap.org/0/0/0.png';
+        const earthMaterial = new THREE.MeshBasicMaterial({
+            map: textureLoader.load(osmTileUrl),
+        });
 
-        let orbitData = [];
+        // Создаем глобус
+        const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+        scene.add(earth);
 
-        async function fetchOrbitData(satelliteName, Time, step) {
-            const response = await fetch(`/convert_TLE?satelliteName=${satelliteName}&Time=${Time}&step_minutes=${step}`);
-            orbitData = await response.json();
-            plotOrbit();
-        }
+        // Функция для отображения орбиты спутника
+        function createOrbit(radius, color) {
+            const points = [];
+            const segments = 100;
 
-        function plotOrbit() {
-            const orbitCoordinates = [];
-            orbitData.forEach(point => {
-                orbitCoordinates.push([point.lat, point.lon]);
-            });
-
-            const orbitLine = WE.polygon(orbitCoordinates, {
-            color: '#ff0000',
-             weight: 3,
-             opacity: 0.7,
-            fill: false
-            }).addTo(earth);
-        }
-
-        function addSatellite() {
-            const satelliteName = document.getElementById('satellite_name').value;
-            const Time = document.getElementById('time').value;
-            const step = document.getElementById('step').value;
-            if (satelliteName) {
-                fetchOrbitData(satelliteName, Time, step);
-            } else {
-                alert("Введите имя спутника.");
+            for (let i = 0; i <= segments; i++) {
+                const angle = (i / segments) * 2 * Math.PI;
+                points.push(new THREE.Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle)));
             }
+
+            const orbitGeometry = new THREE.BufferGeometry().setFromPoints(points);
+            const orbitMaterial = new THREE.LineBasicMaterial({ color });
+            const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
+            scene.add(orbitLine);
         }
 
+
+        // Пример орбит
+        createOrbit(earthRadius + 5, 0xff0000); // Низкая орбита (LEO)
+        createOrbit(earthRadius + 15, 0x00ff00); // Средняя орбита (MEO)
+        createOrbit(earthRadius + 35, 0x0000ff); // Геостационарная орбита (GEO)
+
+        // Спутник
+        const satelliteGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+        const satelliteMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+        const satellite = new THREE.Mesh(satelliteGeometry, satelliteMaterial);
+        scene.add(satellite);
+
+        // Настройки камеры
+        camera.position.set(0, 30, 50);
+
+        // Анимация
+        let time = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Обновляем позицию спутника по круговой орбите
+            const angle = time * 0.1;
+            satellite.position.x = (earthRadius + 15) * Math.cos(angle);
+            satellite.position.z = (earthRadius + 15) * Math.sin(angle);
+
+            // Вращаем глобус
+            earth.rotation.y += 0.5;
+
+            controls.update();
+            renderer.render(scene, camera);
+            time += 1;
+        }
+
+        animate();
+
+        // Обработка изменения размера окна
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>
