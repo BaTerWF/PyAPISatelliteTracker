@@ -6,13 +6,12 @@ import requests
 from dotenv import load_dotenv
 import os
 from database import Database
-from TLE import TLEConverter
-from skyfield.api import load, EarthSatellite
-from astropy.time import Time
-from astropy.coordinates import EarthLocation, GCRS, ITRS
-from astropy import units as u
-import numpy as np
 from datetime import datetime, timedelta
+from astropy.coordinates import TEME, ITRS, CartesianRepresentation
+from astropy.time import Time as AstroPyTime
+from astropy import units as u
+from sgp4.api import Satrec
+from sgp4.api import SatrecArray
 
 html = Jinja2Templates(directory="html")
 load_dotenv("config.env")
@@ -70,19 +69,48 @@ async def get_tle(satelliteName:str = None, noradID:str = None):
     result = db.get_tle_by_name_or_norad(satelliteName=satelliteName)
     return result
 
+
 @app.get("/convert_TLE")
-async def convert(satelliteName: str = None, noradID: str = None, Time = 1, step_minutes = 5):
+async def convert(
+        satelliteName: str = None,
+        noradID: str = None,
+        Time: int = 1,
+        step_minutes: int = 5
+):
+    # Получаем TLE
     satelliteTle = await get_tle(satelliteName=satelliteName, noradID=noradID)
     tle_line1 = satelliteTle['line1']
     tle_line2 = satelliteTle['line2']
-    converter = TLEConverter(tle_line1, tle_line2)
+
+    # Инициализируем Satrec для работы с TLE
+    sat = Satrec.twoline2rv(tle_line1, tle_line2)
+
+    # Временной интервал для расчета
     start_time = datetime.utcnow()
-    end_time = start_time + timedelta(hours=int(Time))
-    orbit_data = converter.calculate_orbit(start_time, end_time, step_minutes=int(step_minutes))
+    end_time = start_time + timedelta(hours=Time)
+    steps = int((end_time - start_time).total_seconds() / (step_minutes * 60))
+
+    times = [start_time + timedelta(minutes=step_minutes * i) for i in range(steps + 1)]
+    astro_times = AstroPyTime(times, scale="utc")
+
+    # Рассчитываем координаты в TEME
+    e, teme_positions, teme_velocities = sat.sgp4_array(
+        astro_times.jd1, astro_times.jd2
+    )
+
+    # Преобразуем в ECEF
+    itrs_positions = TEME(
+        CartesianRepresentation(teme_positions.T * u.km), obstime=astro_times
+    ).transform_to(ITRS(obstime=astro_times)).cartesian.xyz
+
+    # Преобразуем в формат JSON {x, y, z}
     TrackSatelite = []
-    for coord in orbit_data:
-        TrackSatelite.append({"lat": coord[0], "lon": coord[1], "alt": coord[2]})
-    print(TrackSatelite)
+    for pos in itrs_positions.T:
+        TrackSatelite.append({
+            "x": pos[0].value,
+            "y": pos[1].value,
+            "z": pos[2].value
+        })
 
     return TrackSatelite
 
