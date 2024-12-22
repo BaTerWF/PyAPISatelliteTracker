@@ -80,33 +80,68 @@ class Database:
             logger.error(f"Failed to insert/update TLE data for {satellite_name}: {str(e)}")
             raise e
 
-    def get_tle_by_name_or_norad(self, satelliteName=None, noradID=None):
+    def get_tle_by_norad(self, noradIDs: list):
         try:
-            if satelliteName:
-                query = sql.SQL("""
-                    SELECT satellite_name, line1, line2
-                    FROM "Satelite".tle_data
-                    WHERE satellite_name = %s
-                """)
-                self.cursor.execute(query, (satelliteName,))
-            elif noradID:
-                query = sql.SQL("""
-                    SELECT satellite_name, line1, line2
-                    FROM "Satelite".tle_data
-                    WHERE norad_id = %s
-                """)
-                self.cursor.execute(query, (noradID,))
-            else:
-                return None
+            # Формируем SQL-запрос для выборки всех записей с заданными NORAD ID
+            query = sql.SQL("""
+                SELECT norad_id, line1, line2
+                FROM "Satelite".tle_data
+                WHERE norad_id = ANY(%s)
+            """)
 
-            result = self.cursor.fetchone()
-            if result:
-                return {
-                    "satellite_name": result[0],
-                    "line1": result[1],
-                    "line2": result[2]
-                }
-            return None
+            # Выполняем запрос
+            self.cursor.execute(query, (noradIDs,))
+
+            # Извлекаем результаты и формируем словарь
+            results = self.cursor.fetchall()
+            tle_data = {
+                record[0]: [record[1], record[2]] for record in results
+            }
+
+            return tle_data
         except Exception as e:
-            logger.error(f"Error fetching TLE data: {str(e)}")
+            logger.error(f"Error fetching TLE data for NORAD IDs {noradIDs}: {str(e)}")
+            raise e
+        
+    def get_all_satellites(self):
+        try:
+            # Выполняем запрос для получения всех данных из таблицы
+            query = sql.SQL("""
+                SELECT satellite_name, line1, line2, norad_id, timestamp, "Tracker"
+                FROM "Satelite".tle_data
+            """)
+            self.cursor.execute(query)
+
+            # Извлекаем все записи
+            records = self.cursor.fetchall()
+
+            # Преобразуем записи в список словарей
+            satellites = [
+                {
+                    "satellite_name": record[0],
+                    "line1": record[1],
+                    "line2": record[2],
+                    "norad_id": record[3],
+                    "timestamp": record[4].isoformat() if record[4] else None,
+                    "Tracker": record[5]
+                }
+                for record in records
+            ]
+
+            return satellites
+        except Exception as e:
+            logger.error(f"Error fetching all satellite data: {str(e)}")
+            raise e
+
+    def change_param_tracker(self, norad_ids: list, value: bool):
+        try:
+            query = sql.SQL("""
+                UPDATE "Satelite".tle_data
+                SET "Tracker" = %s
+                WHERE norad_id = ANY(%s)
+            """)
+            self.execute(query, (value, norad_ids))
+            logger.info(f"Updated Tracker for NORAD IDs: {norad_ids} to {value}")
+        except Exception as e:
+            logger.error(f"Failed to update Tracker for NORAD IDs {norad_ids}: {str(e)}")
             raise e

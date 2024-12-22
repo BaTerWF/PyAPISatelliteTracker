@@ -1,17 +1,19 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
 from loguru import logger
 import requests
 from dotenv import load_dotenv
 import os
-from database import Database
 from datetime import datetime, timedelta
-from astropy.coordinates import TEME, ITRS, CartesianRepresentation
-from astropy.time import Time as AstroPyTime
-from astropy import units as u
 from sgp4.api import Satrec
-from sgp4.api import SatrecArray
+from astropy.time import Time as AstroPyTime
+from astropy.coordinates import TEME, ITRS, CartesianRepresentation
+from astropy import units as u
+from database import Database
+from TLE import get_orbit_and_position
+from typing import List
+from fastapi import Query
 
 html = Jinja2Templates(directory="html")
 load_dotenv("config.env")
@@ -31,21 +33,20 @@ if not pg_database:
 if not pg_port:
     pg_port = '5432'
 
-#поменяйте конфиг и больше его не коммитте
 db = Database(pg_host, pg_database, pg_user, pg_password, pg_port)
 TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
 
 app = FastAPI()
-logger.add("stalites_log.log", level="DEBUG", encoding="utf-8")
+logger.add("satellites_log.log", level="DEBUG", encoding="utf-8")
+
 
 @app.get("/")
-def read_root():
-    return {"message": "First endpoint"}
+def read_root(request: Request):
+    return html.TemplateResponse("main.html", {"request": request})
 
 
 @app.get("/fetch_tle")
 def fetch_tle():
-
     try:
         response = requests.get(TLE_URL)
         if response.status_code != 200:
@@ -63,59 +64,49 @@ def fetch_tle():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
-
-@app.get("/get_satellite")
-async def get_tle(satelliteName:str = None, noradID:str = None):
-    result = db.get_tle_by_name_or_norad(satelliteName=satelliteName)
+@app.get("/get_all_satelite")
+async def get_all_satelite():
+    result = db.get_all_satellites()
     return result
 
+@app.get("/get_orbit_data")
+async def get_orbit_data(norad_ids: List[str] = Query(...)):
+    try:
+        # Получаем TLE-данные для списка NORAD ID
+        satellite_tle = db.get_tle_by_norad(norad_ids)  # Передаем список NORAD ID
+        if not satellite_tle:
+            raise HTTPException(status_code=404, detail="Satellites not found")
 
-@app.get("/convert_TLE")
-async def convert(
-        satelliteName: str = None,
-        noradID: str = None,
-        Time: int = 1,
-        step_minutes: int = 5
-):
-    # Получаем TLE
-    satelliteTle = await get_tle(satelliteName=satelliteName, noradID=noradID)
-    tle_line1 = satelliteTle['line1']
-    tle_line2 = satelliteTle['line2']
+        orbit_data_list = []
 
-    # Инициализируем Satrec для работы с TLE
-    sat = Satrec.twoline2rv(tle_line1, tle_line2)
+        # Для каждого NORAD ID извлекаем данные TLE и орбитальные параметры
+        for norad_id in norad_ids:
+            if norad_id not in satellite_tle:
+                continue  # Пропускаем если спутник не найден
 
-    # Временной интервал для расчета
-    start_time = datetime.utcnow()
-    end_time = start_time + timedelta(hours=Time)
-    steps = int((end_time - start_time).total_seconds() / (step_minutes * 60))
+            tle_line1, tle_line2 = satellite_tle[norad_id]
+            current_time = datetime.utcnow()
 
-    times = [start_time + timedelta(minutes=step_minutes * i) for i in range(steps + 1)]
-    astro_times = AstroPyTime(times, scale="utc")
+            # Вычисляем орбитальные данные
+            orbit_data = get_orbit_and_position(tle_line1, tle_line2, current_time)
+            orbit_data_list.append({
+                "norad_id": norad_id,
+                "orbit_data": orbit_data
+            })
 
-    # Рассчитываем координаты в TEME
-    e, teme_positions, teme_velocities = sat.sgp4_array(
-        astro_times.jd1, astro_times.jd2
-    )
+        return JSONResponse(content={"satellites": orbit_data_list})
+    except Exception as e:
+        logger.error(f"Error fetching orbit data for NORAD IDs {norad_ids}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching orbit data: {str(e)}")
 
-    # Преобразуем в ECEF
-    itrs_positions = TEME(
-        CartesianRepresentation(teme_positions.T * u.km), obstime=astro_times
-    ).transform_to(ITRS(obstime=astro_times)).cartesian.xyz
 
-    # Преобразуем в формат JSON {x, y, z}
-    TrackSatelite = []
-    for pos in itrs_positions.T:
-        TrackSatelite.append({
-            "x": pos[0].value,
-            "y": pos[1].value,
-            "z": pos[2].value
-        })
 
-    return TrackSatelite
+@app.post("/remove_orbit_data/{norad_id}")
+async def remove_orbit_data(norad_id: str):
+    # Если требуется специфическая логика на сервере
+    logger.info(f"Removing orbit data for NORAD ID {norad_id}")
+    return {"status": "success", "norad_id": norad_id}
 
 @app.get("/display_maps", response_class=HTMLResponse)
 async def display_maps(request: Request):
     return html.TemplateResponse("index.html", {"request": request})
-
-
