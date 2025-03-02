@@ -65,6 +65,10 @@
             <button id="refreshTableBtn">Обновить данные</button>
             <input type="text" id="searchInput" placeholder="Поиск..." style="margin-left: 20px; padding: 5px; width: 300px;">
         </div>
+        <div id="authSection" style="position: absolute; top: 10px; right: 10px; z-index: 3000;">
+            <button id="loginBtn">Войти</button>
+            <button id="logoutBtn" style="display: none;">Выйти</button>
+        </div>
         <table border="1" id="satelliteTable" style="width: 100%; text-align: left;">
             <thead>
                 <tr>
@@ -88,60 +92,52 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script>
+        <script>
+        let authToken = null;
         const selectedNoradIds = new Set();
 
-        // Показать/скрыть индикатор загрузки
-        function toggleLoading(show) {
-            document.getElementById('loadingIndicator').style.display = show ? 'block' : 'none';
-        }
+        // Обработчики авторизации
+        document.getElementById('loginBtn').addEventListener('click', async () => {
+            const username = prompt('Введите имя пользователя:');
+            const password = prompt('Введите пароль:');
 
-        // Загрузка данных в таблицу
-        async function loadSatelliteData() {
-            const tableBody = document.querySelector('#satelliteTable tbody');
-            tableBody.innerHTML = '';
             try {
-                const response = await fetch('/get_all_satelite'); // Убедитесь, что эндпоинт корректный
-                if (!response.ok) throw new Error('Ошибка загрузки данных');
-                const satellites = await response.json();
-                satellites.forEach(satellite => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td><input type="checkbox" class="satellite-checkbox" data-norad-id="${satellite.norad_id}"></td>
-                        <td>${satellite.satellite_name}</td>
-                        <td>${satellite.line1}</td>
-                        <td>${satellite.line2}</td>
-                        <td>${satellite.norad_id}</td>
-                        <td>${satellite.timestamp}</td>
-                        <td>${satellite.Tracker ? 'Да' : 'Нет'}</td>
-                    `;
-                    tableBody.appendChild(row);
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
                 });
 
-                document.querySelectorAll('.satellite-checkbox').forEach(checkbox => {
-                    checkbox.addEventListener('change', event => {
-                        const noradId = event.target.dataset.noradId;
-                        event.target.checked ? selectedNoradIds.add(noradId) : selectedNoradIds.delete(noradId);
-                        console.log([...selectedNoradIds]);
-                    });
-                });
+                if (!response.ok) throw new Error('Ошибка авторизации');
+
+                const data = await response.json();
+                authToken = data.token;
+                document.getElementById('loginBtn').style.display = 'none';
+                document.getElementById('logoutBtn').style.display = 'inline';
             } catch (error) {
-                alert('Ошибка: ' + error.message);
+                alert(error.message);
             }
-        }
+        });
 
-        // Фильтрация таблицы
-        function filterTable() {
-            const searchInput = document.getElementById('searchInput').value.toLowerCase();
-            const tableRows = document.querySelectorAll('#satelliteTable tbody tr');
-            tableRows.forEach(row => {
-                const cells = row.querySelectorAll('td');
-                const rowText = Array.from(cells).map(cell => cell.textContent.toLowerCase()).join(' ');
-                row.style.display = rowText.includes(searchInput) ? '' : 'none';
-            });
-        }
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            try {
+                await fetch('/auth/logout', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                authToken = null;
+                document.getElementById('loginBtn').style.display = 'inline';
+                document.getElementById('logoutBtn').style.display = 'none';
+            } catch (error) {
+                alert(error.message);
+            }
+        });
 
-        // Обработчики кнопок
+        // Обработчик для кнопки "Показать таблицу"
         document.getElementById('showTableBtn').addEventListener('click', async () => {
             document.getElementById('satelliteTableModal').style.display = 'block';
             toggleLoading(true);
@@ -149,15 +145,25 @@
             toggleLoading(false);
         });
 
+        // Обработчик для кнопки "Закрыть"
         document.getElementById('closeTableBtn').addEventListener('click', () => {
             document.getElementById('satelliteTableModal').style.display = 'none';
-            sendNoradIds()
+
+            // Очистка предыдущих объектов
+            scene.children.slice().forEach(child => {
+                if (child !== globe && child !== camera && child !== light) {
+                    scene.remove(child);
+                }
+            });
+
+            sendNoradIds();
         });
 
+        // Обработчик для кнопки "Обновить данные"
         document.getElementById('refreshTableBtn').addEventListener('click', async () => {
             toggleLoading(true);
             try {
-                const response = await fetch('/fetch_tle', { method: 'GET' }); // Убедитесь, что эндпоинт корректный
+                const response = await fetch('/fetch_tle', { method: 'GET' });
                 if (!response.ok) throw new Error('Ошибка обновления данных');
                 await loadSatelliteData();
             } catch (error) {
@@ -167,6 +173,152 @@
             }
         });
 
+        // Функция для отображения/скрытия индикатора загрузки
+        function toggleLoading(show) {
+            document.getElementById('loadingIndicator').style.display = show ? 'block' : 'none';
+        }
+
+        // Обновленная функция загрузки данных
+        async function loadSatelliteData() {
+            try {
+                // Получаем ссылку на тело таблицы
+                const tableBody = document.querySelector('#satelliteTable tbody');
+                if (!tableBody) {
+                    throw new Error('Table body element not found');
+                }
+
+                // Очищаем предыдущие данные
+                tableBody.innerHTML = '';
+
+                // Загрузка данных с сервера
+                const [allSatsResponse, mySatsResponse] = await Promise.all([
+                    fetch('/get_all_satellites', {
+                        credentials: 'include' // Добавляем для передачи кук
+                    }),
+                    fetch('/my_satellites', {
+                        credentials: 'include',
+                        headers: {
+                            'Authorization': `Bearer ${authToken}`
+                        }
+                    })
+                ]);
+
+                // Проверка статусов ответов
+                if (!allSatsResponse.ok || !mySatsResponse.ok) {
+                    throw new Error('Ошибка загрузки данных с сервера');
+                }
+
+                // Парсинг JSON
+                const allSatellites = await allSatsResponse.json();
+                const mySatellites = await mySatsResponse.json();
+
+                // Проверка структуры данных
+                if (!Array.isArray(allSatellites) || !Array.isArray(mySatellites.tracked_satellites)) {
+                    throw new Error('Некорректный формат данных');
+                }
+
+                // Обработка данных
+                const trackedIds = new Set(mySatellites.tracked_satellites.map(s => s.norad_id));
+
+                allSatellites.forEach(satellite => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td><input type="checkbox"
+                                  class="satellite-checkbox"
+                                  data-norad-id="${satellite.norad_id}"
+                                  ${trackedIds.has(satellite.norad_id) ? 'checked' : ''}></td>
+                        <td>${satellite.name}</td>
+                        <td>${satellite.tle_line1}</td>
+                        <td>${satellite.tle_line2}</td>
+                        <td>${satellite.norad_id}</td>
+                        <td>${new Date(satellite.updated_at).toLocaleString()}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+
+                // Добавляем обработчики для чекбоксов
+                document.querySelectorAll('.satellite-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', async event => {
+                        const noradId = event.target.dataset.noradId;
+                        const isChecked = event.target.checked;
+
+                        // Обновляем список выбранных ID
+                        if (isChecked) {
+                            selectedNoradIds.add(noradId);
+                        } else {
+                            selectedNoradIds.delete(noradId);
+                        }
+                        await displayOrbitData([...selectedNoradIds]);
+
+                        // Отправляем запрос
+                        try {
+                            const endpoint = isChecked ? '/track_satellite' : '/untrack_satellite';
+                            const response = await fetch(`${endpoint}/${noradId}`, {
+                                method: 'POST',
+                                credentials: 'include',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${authToken}`
+                                }
+                            });
+
+                            if (!response.ok) throw new Error(await response.text());
+                        } catch (error) {
+                            console.error('Error:', error);
+                            event.target.checked = !isChecked;
+                            selectedNoradIds[isChecked ? 'delete' : 'add'](noradId);
+                            alert(`Ошибка: ${error.message}`);
+                        }
+                    });
+                });
+
+            } catch (error) {
+                console.error('Ошибка загрузки данных:', error);
+                alert('Ошибка: ' + error.message);
+            } finally {
+                // Гарантируем скрытие индикатора загрузки
+                toggleLoading(false);
+            }
+        }
+
+        // Обновленная функция получения орбитальных данных
+        async function displayOrbitData(noradIds) {
+          try {
+            scene.children.filter(child =>
+              child.name?.startsWith('sat-') || child.name?.startsWith('orbit-')
+            ).forEach(child => scene.remove(child));
+
+            await Promise.all(noradIds.map(async noradId => {
+              const sat = await fetchSatelliteData(noradId);
+              if (sat) {
+                // Передаем noradId вторым аргументом
+                createOrbitFromData(sat.orbit_data.orbital_parameters, noradId);
+                updateSatellitePosition(sat);
+              }
+            }));
+          } catch (error) {
+            console.error('Ошибка отрисовки:', error);
+          }
+        }
+        async function fetchSatelliteData(noradId) {
+            try {
+                const response = await fetch(`/satellite/${noradId}`);
+                if (!response.ok) {
+                    throw new Error(`Ошибка ${response.status}`);
+                }
+                const data = await response.json();
+
+                // Проверка структуры ответа
+                if (!data?.orbit_data?.orbital_parameters || !data.position) {
+                    throw new Error("Некорректный формат данных");
+                }
+
+                return data;
+            } catch (error) {
+                console.error('Ошибка загрузки данных:', error);
+                return null;
+            }
+        }
         // Фильтрация на основе поиска
         document.getElementById('searchInput').addEventListener('input', filterTable);
 
@@ -191,41 +343,69 @@
         scene.add(light);
 
         camera.position.set(3, 3, 3);
+        renderer.setClearColor(0x000000, 1); // Черный фон
+        camera.position.set(0, 0, 5); // Более подходящая начальная позиция
+        controls.enableDamping = true; // Плавное управление
+        controls.dampingFactor = 0.05;
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
         controls.update();
 
         function animate() {
             requestAnimationFrame(animate);
-            globe.rotation.y += 0.001;
+            controls.update();
             renderer.render(scene, camera);
+        }
+
+        let updateInterval;
+
+        async function startOrbitUpdates() {
+            if (updateInterval) clearInterval(updateInterval);
+            updateInterval = setInterval(async () => {
+                if (selectedNoradIds.size > 0) {
+                    await displayOrbitData([...selectedNoradIds]);
+                }
+            }, 5000);
+        }
+
+        // Обновите функцию sendNoradIds
+        async function sendNoradIds() {
+            try {
+                if (selectedNoradIds.size === 0) {
+                    console.log('Нет выбранных спутников для отрисовки');
+                    return;
+                }
+                await displayOrbitData([...selectedNoradIds]);
+                startOrbitUpdates();
+            } catch (error) {
+                console.error('Ошибка отправки данных:', error);
+                alert('Ошибка отрисовки: ' + error.message);
+            }
         }
 
         animate();
 
-        // Функция для отправки NORAD ID на сервер
-        async function sendNoradIds() {
-            if (selectedNoradIds.size === 0) {
-                alert('Выберите хотя бы один спутник');
-                return;
-            }
 
-            await displayOrbitData([...selectedNoradIds]);
-        }
+        let filterTimeout;
 
-        async function displayOrbitData(noradIds) {
-            try {
-                const response = await fetch(`/get_orbit_data?norad_ids=${noradIds.join('&norad_ids=')}`);
-                if (!response.ok) throw new Error('Ошибка загрузки данных орбиты');
+        function filterTable() {
+            clearTimeout(filterTimeout);
+            filterTimeout = setTimeout(() => {
+                const searchInput = document.getElementById('searchInput').value.toLowerCase();
+                const rows = document.querySelectorAll('#satelliteTable tbody tr');
 
-                const satelliteData = await response.json();
+                rows.forEach(row => {
+                    const cells = row.querySelectorAll('td');
+                    const visible = Array.from(cells)
+                        .slice(1, 5) // Пропускаем чекбокс
+                        .some(cell => cell.textContent.toLowerCase().includes(searchInput));
 
-                // Обновляем позиции спутников
-                satelliteData.satellites.forEach(satellite => {
-                    updateSatellitePosition(satellite);
-                    createOrbitFromData(satellite);
+                    row.style.display = visible ? '' : 'none';
                 });
-            } catch (error) {
-                alert('Ошибка: ' + error.message);
-            }
+            }, 300); // Задержка 300 мс
         }
 
         // Функция для регулярного обновления данных орбит спутников
@@ -235,15 +415,21 @@
             }, 5000); // Период 5000 миллисекунд (5 секунд)
         }
 
-        function createOrbitFromData(satellite) {
-            const { semi_major_axis_km, eccentricity, inclination_deg, right_ascension_deg, argument_perigee_deg } = satellite.orbit_data.orbital_parameters;
-
-            const scaleFactor = 0.001; // Масштабируем орбиту, уменьшаем радиус
+        function createOrbitFromData(orbitalParams, noradId) {
+            const {
+                semi_major_axis_km,
+                eccentricity,
+                inclination_deg,
+                right_ascension_deg,
+                argument_perigee_deg
+            } = orbitalParams;
+            const oldOrbit = scene.getObjectByName(`orbit-${noradId}`);
+            if (oldOrbit) scene.remove(oldOrbit);
+            const scaleFactor = 0.001; // Конвертация км в масштаб сцены
             const semiMajorAxis = semi_major_axis_km * scaleFactor;
-            const inclination = THREE.MathUtils.degToRad(inclination_deg);
-            const rightAscension = THREE.MathUtils.degToRad(right_ascension_deg);
-            const argumentPerigee = THREE.MathUtils.degToRad(argument_perigee_deg);
-
+            const inclination = THREE.MathUtils.degToRad(orbitalParams.inclination_deg);
+            const rightAscension = THREE.MathUtils.degToRad(orbitalParams.right_ascension_deg);
+            const argumentPerigee = THREE.MathUtils.degToRad(orbitalParams.argument_perigee_deg);
             const points = []; // Точки для траектории орбиты
             const numPoints = 360; // Количество точек для траектории
 
@@ -267,16 +453,16 @@
                 points.push(new THREE.Vector3(xFinal, yFinal, zFinal));
             }
 
-            // Создаем геометрию линии для орбиты
-            const orbitGeometry = new THREE.BufferGeometry().setFromPoints(points);
-
-            // Создаем материал для линии
-            const orbitMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-
             // Создаем объект линии и добавляем его в сцену
-            const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
-            scene.add(orbitLine);
-        }
+            const orbitGeometry = new THREE.BufferGeometry().setFromPoints(points);
+                const orbitLine = new THREE.Line(
+                    orbitGeometry,
+                    new THREE.LineBasicMaterial({ color: 0x00ff00 })
+                );
+                scene.add(orbitLine);
+            orbitLine.name = `orbit-${noradId}`;
+            }
+
 
 
         function solveKeplerEquation(meanAnomaly, eccentricity, tolerance = 1e-6) {
@@ -310,42 +496,27 @@
         }
 
         function updateSatellitePosition(satelliteData) {
-            const { norad_id, orbit_data } = satelliteData;
+            const { norad_id, position } = satelliteData;
 
-            // Проверяем, есть ли данные о географической позиции
-            if (!orbit_data || !orbit_data.current_lat_lon_alt) {
-                console.error(`Нет данных о позиции для спутника NORAD ID: ${norad_id}`);
-                return;
-            }
+            // Удаляем старый объект
+            const oldObj = scene.getObjectByName(`sat-${norad_id}`);
+            if (oldObj) scene.remove(oldObj);
 
-            const position = orbit_data.current_lat_lon_alt;
+            // Создаем новый спутник
+            const geometry = new THREE.SphereGeometry(0.02, 8, 8);
+            const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const sphere = new THREE.Mesh(geometry, material);
+            sphere.name = `sat-${norad_id}`;
 
-            // Проверяем наличие координат
-            if (position.latitude_deg === undefined || position.longitude_deg === undefined || position.altitude_km === undefined) {
-                console.error(`Некорректные данные о позиции для спутника NORAD ID: ${norad_id}`);
-                return;
-            }
-
-            // Преобразуем данные в 3D-координаты
-            const satellitePosition = convertLatLonAltToXYZ(position.latitude_deg, position.longitude_deg, position.altitude_km);
-
-            // Логируем координаты для диагностики
-            console.log(`Положение спутника NORAD ID: ${norad_id} - X: ${satellitePosition.x}, Y: ${satellitePosition.y}, Z: ${satellitePosition.z}`);
-
-            // Масштабируем координаты для отображения
+            // Применяем масштабирование
             const scaleFactor = 0.001;
+            sphere.position.set(
+                position.x * scaleFactor,
+                position.y * scaleFactor,
+                position.z * scaleFactor
+            );
 
-            // Создаем объект для спутника
-            const satelliteRadius = 0.05; // Радиус спутника
-            const satelliteMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-            const satelliteGeometry = new THREE.SphereGeometry(satelliteRadius, 8, 8);
-            const satelliteMesh = new THREE.Mesh(satelliteGeometry, satelliteMaterial);
-
-            // Устанавливаем позицию спутника с применением масштаба
-            satelliteMesh.position.set(satellitePosition.x * scaleFactor, satellitePosition.y * scaleFactor, satellitePosition.z * scaleFactor);
-
-            // Добавляем спутник в сцену
-            scene.add(satelliteMesh);
+            scene.add(sphere);
         }
     </script>
 </body>

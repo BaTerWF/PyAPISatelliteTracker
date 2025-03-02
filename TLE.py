@@ -5,6 +5,7 @@ from astropy.time import Time as AstroPyTime
 from astropy import units as u
 from datetime import datetime
 from numpy import rad2deg
+from loguru import logger
 
 TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
 
@@ -102,12 +103,20 @@ def get_lat_lon_alt(tle_line1, tle_line2, current_time=None):
 
 def get_orbit_and_position(tle_line1, tle_line2, current_time=None):
     """Get both orbital parameters and current position of the satellite."""
-    orbital_params = get_orbital_parameters(tle_line1, tle_line2)
-    position_xyz = get_satellite_position_xyz(tle_line1, tle_line2, current_time)
-    lat_lon_alt = get_lat_lon_alt(tle_line1, tle_line2, current_time)
+    try:
+        orbital_params = get_orbital_parameters(tle_line1, tle_line2)
+        position_xyz = get_satellite_position_xyz(tle_line1, tle_line2, current_time)
+        lat_lon_alt = get_lat_lon_alt(tle_line1, tle_line2, current_time)
 
-    return {
-        "orbital_parameters": orbital_params,
-        "current_position_xyz": position_xyz,
-        "current_lat_lon_alt": lat_lon_alt,
-    }
+        return {
+            "position": {
+                "x": position_xyz["x_km"],
+                "y": position_xyz["y_km"],
+                "z": position_xyz["z_km"]
+            },
+            "orbital_parameters": orbital_params,
+            "current_lat_lon_alt": lat_lon_alt
+        }
+    except Exception as e:
+        logger.error(f"Error calculating orbit data: {str(e)}")
+        raise
