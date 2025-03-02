@@ -1,50 +1,122 @@
-from skyfield.api import EarthSatellite, load
-from astropy.time import Time
-from astropy.coordinates import EarthLocation, GCRS, ITRS, AltAz
+import requests
+from sgp4.api import Satrec
+from astropy.coordinates import TEME, ITRS, CartesianRepresentation, EarthLocation
+from astropy.time import Time as AstroPyTime
 from astropy import units as u
-from astropy.coordinates import CartesianRepresentation
-import numpy as np
+from datetime import datetime
+from numpy import rad2deg
+from loguru import logger
 
+TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
 
-# Пока не работает.
-class TLEConverter:
-    def __init__(self, tle_line1, tle_line2):
-        self.tle_line1 = tle_line1
-        self.tle_line2 = tle_line2
-        self.timescale = load.timescale()
-        self.satellite = EarthSatellite(tle_line1, tle_line2, 'Sat', self.timescale)
+def fetch_tle_from_source():
+    """Fetch TLE data from CelesTrak."""
+    try:
+        response = requests.get(TLE_URL)
+        if response.status_code != 200:
+            raise Exception("Failed to fetch TLE data.")
+        tle_data = response.text.splitlines()
+        return tle_data
+    except Exception as e:
+        raise Exception(f"Error fetching TLE: {str(e)}")
 
-    def tle_to_ef(self, time_str):
-        t = self.timescale.utc(Time(time_str).datetime)
-        geocentric = self.satellite.at(t)
-        subpoint = geocentric.subpoint()
-        return subpoint.latitude.degrees, subpoint.longitude.degrees, subpoint.elevation.m
+def process_tle_data(tle_data):
+    """Process TLE data into satellite entries."""
+    satellites = []
+    for i in range(0, len(tle_data), 3):
+        satellite_name = tle_data[i].strip()
+        line1 = tle_data[i + 1].strip()
+        line2 = tle_data[i + 2].strip()
+        satellites.append({
+            "satellite_name": satellite_name,
+            "line1": line1,
+            "line2": line2
+        })
+    return satellites
 
-    def ef_to_j2000(self, time_str):
-        lat, lon, elevation = self.tle_to_ef(time_str)
-        location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=elevation*u.m)
-        time = Time(time_str)
-        itrs = ITRS(location.get_itrs(obstime=time))
-        gcrs = itrs.transform_to(GCRS(obstime=time))
-        return gcrs.cartesian
+def get_orbital_parameters(tle_line1, tle_line2):
+    """Calculate orbital parameters from TLE data."""
+    sat = Satrec.twoline2rv(tle_line1, tle_line2)
+    # Calculate semi-major axis in km
+    mu = 398600.4418  # Earth's gravitational parameter in km^3/s^2
+    n = sat.no_kozai / 60.0  # Mean motion in revs per second
+    semi_major_axis = (mu / (n * 2 * 3.14159265359) ** 2) ** (1 / 3)
 
-    def j2000_to_gtsk(self, time_str):
-        cartesian = self.ef_to_j2000(time_str)
-        x, y, z = cartesian.x.value, cartesian.y.value, cartesian.z.value
-        return x, y, z
+    params = {
+        "semi_major_axis_km": semi_major_axis,
+        "eccentricity": sat.ecco,
+        "inclination_deg": rad2deg(sat.inclo),
+        "right_ascension_deg": rad2deg(sat.nodeo),
+        "argument_perigee_deg": rad2deg(sat.argpo),
+        "mean_anomaly_deg": rad2deg(sat.mo),
+    }
+    return params
 
-    def gtsk_to_pz90(self, x, y, z):
-        return x, y, z
+def get_satellite_position_xyz(tle_line1, tle_line2, current_time=None):
+    """Get satellite position in XYZ coordinates (ITRS) for the given time."""
+    sat = Satrec.twoline2rv(tle_line1, tle_line2)
 
-    def convert(self, time_str):
-        lat, lon, elevation = self.tle_to_ef(time_str)
-        print(f"EF (Lat, Lon, Elev): {lat}, {lon}, {elevation}")
+    if current_time is None:
+        current_time = datetime.utcnow()
 
-        j2000_coords = self.ef_to_j2000(time_str)
-        print(f"J2000 (X, Y, Z): {j2000_coords.x.value}, {j2000_coords.y.value}, {j2000_coords.z.value}")
+    astro_time = AstroPyTime(current_time, scale="utc")
+    jd, fr = astro_time.jd1, astro_time.jd2
 
-        x, y, z = self.j2000_to_gtsk(time_str)
-        print(f"GTSK (X, Y, Z): {x}, {y}, {z}")
+    error_code, teme_position, teme_velocity = sat.sgp4(jd, fr)
+    if error_code != 0:
+        raise ValueError(f"SGP4 error code: {error_code}")
 
-        pz90_x, pz90_y, pz90_z = self.gtsk_to_pz90(x, y, z)
-        print(f"PZ-90 (X, Y, Z): {pz90_x}, {pz90_y}, {pz90_z}")
+    teme_coords = TEME(CartesianRepresentation(teme_position * u.km), obstime=astro_time)
+    itrs_coords = teme_coords.transform_to(ITRS(obstime=astro_time)).cartesian.xyz
+
+    return {
+        "x_km": itrs_coords[0].value,
+        "y_km": itrs_coords[1].value,
+        "z_km": itrs_coords[2].value,
+    }
+
+def get_lat_lon_alt(tle_line1, tle_line2, current_time=None):
+    """Get satellite latitude, longitude, and altitude for the given time."""
+    sat = Satrec.twoline2rv(tle_line1, tle_line2)
+
+    if current_time is None:
+        current_time = datetime.utcnow()
+
+    astro_time = AstroPyTime(current_time, scale="utc")
+    jd, fr = astro_time.jd1, astro_time.jd2
+
+    error_code, teme_position, teme_velocity = sat.sgp4(jd, fr)
+    if error_code != 0:
+        raise ValueError(f"SGP4 error code: {error_code}")
+
+    teme_coords = TEME(CartesianRepresentation(teme_position * u.km), obstime=astro_time)
+    itrs_coords = teme_coords.transform_to(ITRS(obstime=astro_time)).cartesian.xyz
+
+    earth_location = EarthLocation(x=itrs_coords[0], y=itrs_coords[1], z=itrs_coords[2])
+    geodetic_location = earth_location.to_geodetic()
+
+    return {
+        "latitude_deg": geodetic_location.lat.deg,
+        "longitude_deg": geodetic_location.lon.deg,
+        "altitude_km": geodetic_location.height.to(u.km).value,
+    }
+
+def get_orbit_and_position(tle_line1, tle_line2, current_time=None):
+    """Get both orbital parameters and current position of the satellite."""
+    try:
+        orbital_params = get_orbital_parameters(tle_line1, tle_line2)
+        position_xyz = get_satellite_position_xyz(tle_line1, tle_line2, current_time)
+        lat_lon_alt = get_lat_lon_alt(tle_line1, tle_line2, current_time)
+
+        return {
+            "position": {
+                "x": position_xyz["x_km"],
+                "y": position_xyz["y_km"],
+                "z": position_xyz["z_km"]
+            },
+            "orbital_parameters": orbital_params,
+            "current_lat_lon_alt": lat_lon_alt
+        }
+    except Exception as e:
+        logger.error(f"Error calculating orbit data: {str(e)}")
+        raise
